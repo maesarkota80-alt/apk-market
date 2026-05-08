@@ -1,53 +1,73 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Native APK Market - High Performance</title>
-    <style>
-        body { font-family: sans-serif; background: #f4f7f6; margin: 0; padding: 20px; }
-        .container { max-width: 1100px; margin: auto; }
-        .search-box { position: sticky; top: 10px; z-index: 100; text-align: center; margin-bottom: 30px; }
-        #searchInput { width: 100%; max-width: 500px; padding: 15px 25px; border-radius: 30px; border: none; shadow: 0 4px 6px rgba(0,0,0,0.1); outline: none; font-size: 16px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 15px; }
-        .card { background: #fff; padding: 15px; border-radius: 12px; text-align: center; text-decoration: none; color: #333; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        .card img { width: 64px; height: 64px; margin-bottom: 10px; }
-        .card h3 { font-size: 14px; margin: 5px 0; height: 35px; overflow: hidden; color: #007bff; }
-        .hidden { display: none !important; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="search-box">
-            <input type="text" id="searchInput" placeholder="Cari dari 4.000+ aplikasi...">
-        </div>
+import os
+import json
+import requests
+from jinja2 import Environment, FileSystemLoader
+from datetime import datetime
 
-        <div class="grid" id="appGrid">
-            {% for app in apps %}
-            <a href="./app/{{ app.pkg_name }}/" class="card" data-name="{{ app.nama | lower }}">
-                <!-- Lazy load gambar agar cepat -->
-                <img src="{{ app.icon }}" loading="lazy" alt="{{ app.nama }}" onerror="this.src='https://f-droid.org/repo/categories/Connectivity.png'">
-                <h3>{{ app.nama }}</h3>
-            </a>
-            {% endfor %}
-        </div>
-    </div>
+# Konfigurasi
+FDROID_JSON = "https://f-droid.org/repo/index-v2.json"
+OUT_DIR = "dist"
+TEMPLATES_DIR = "templates"
+BASE_URL = "https://mini-apk.pages.dev"
 
-    <script>
-        const searchInput = document.getElementById('searchInput');
-        const cards = document.querySelectorAll('.card');
+def get_text(data_field, default=""):
+    if isinstance(data_field, dict):
+        return data_field.get('en-US') or next(iter(data_field.values()), default)
+    return data_field if data_field else default
 
-        searchInput.addEventListener('input', (e) => {
-            const term = e.target.value.toLowerCase();
-            cards.forEach(card => {
-                const name = card.getAttribute('data-name');
-                if (name.includes(term)) {
-                    card.classList.remove('hidden');
-                } else {
-                    card.classList.add('hidden');
-                }
-            });
-        });
-    </script>
-</body>
-</html>
+def build_site():
+    if not os.path.exists(OUT_DIR): os.makedirs(OUT_DIR)
+    
+    # Pastikan folder templates ada
+    if not os.path.exists(TEMPLATES_DIR):
+        print("Folder templates tidak ditemukan!")
+        return
+
+    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
+    template_home = env.get_template('home.html')
+    template_detail = env.get_template('detail.html')
+
+    print("Mengunduh data dari F-Droid...")
+    data = requests.get(FDROID_JSON).json()
+    
+    apps_list = []
+    sitemap_urls = [BASE_URL]
+
+    print("Memproses aplikasi...")
+    for pkg, info in data['packages'].items():
+        meta = info.get('metadata', {})
+        nama = get_text(meta.get('name'), pkg)
+        summary = get_text(meta.get('summary'), "No summary")
+
+        app_context = {
+            "nama": nama,
+            "summary": summary,
+            "deskripsi": get_text(meta.get('description'), "No description"),
+            "pkg_name": pkg,
+            "icon": f"https://f-droid.org/repo/{pkg}/en-US/icon.png"
+        }
+        apps_list.append(app_context)
+        sitemap_urls.append(f"{BASE_URL}/app/{pkg}/")
+
+        app_folder = os.path.join(OUT_DIR, "app", pkg)
+        os.makedirs(app_folder, exist_ok=True)
+        with open(os.path.join(app_folder, "index.html"), "w", encoding="utf-8") as f:
+            f.write(template_detail.render(app=app_context))
+
+    # Buat Halaman Utama
+    with open(os.path.join(OUT_DIR, "index.html"), "w", encoding="utf-8") as f:
+        f.write(template_home.render(apps=apps_list))
+
+    # Buat Sitemap
+    now = datetime.now().strftime("%Y-%m-%d")
+    sitemap_content = f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    for url in sitemap_urls:
+        sitemap_content += f'  <url><loc>{url}</loc><lastmod>{now}</lastmod></url>\n'
+    sitemap_content += '</urlset>'
+    with open(os.path.join(OUT_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
+        f.write(sitemap_content)
+
+    print(f"Sukses! {len(apps_list)} halaman dibuat.")
+
+if __name__ == "__main__":
+    build_site()
